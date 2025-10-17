@@ -1,0 +1,15 @@
+# Windows
+Thumbs.db
+Desktop.ini
+# OneDrive
+OneDrive/
+# IDEs
+.vscode/
+.idea/
+# Java
+target/
+*.class
+# Node
+node_modules/
+# Logs
+*.log

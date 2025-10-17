@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Flappy Bird - Working</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body { height:100%; margin:0; }
+    body {
+      display:flex; align-items:center; justify-content:center;
+      background: linear-gradient(#70c5ce, #e6f7fb);
+      font-family: Arial, Helvetica, sans-serif;
+      overflow:hidden;
+    }
+    #container { position:relative; }
+    canvas {
+      display:block;
+      border-radius:12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      background: linear-gradient(#87d0df, #dff7fb);
+    }
+    #credit {
+      position:absolute; left:12px; top:10px;
+      background: rgba(255,255,255,0.8);
+      padding:6px 10px; border-radius:6px; font-weight:600;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+    #highscore {
+      position:absolute; right:12px; top:10px;
+      background: rgba(255,255,255,0.85);
+      padding:6px 10px; border-radius:6px; font-weight:600;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+    #gameOverScreen {
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      background: white; padding:18px 22px; border-radius:10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+      text-align:center; display:none;
+    }
+    #gameOverScreen button {
+      margin-top:10px; padding:8px 14px; border-radius:8px;
+      border:none;background:#2ecc71;color:white;font-weight:700;cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="credit"> Ducky Goose </div>
+    <div id="highscore">High Score: 0</div>
+    <canvas id="c" width="400" height="600"></canvas>
+
+    <div id="gameOverScreen">
+      <h2>Game Over</h2>
+      <div id="finalScore">Your score: 0</div>
+      <button id="retry">Retry</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const gw = canvas.width, gh = canvas.height;
+
+  const credit = document.getElementById('credit');
+  const highscoreEl = document.getElementById('highscore');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreEl = document.getElementById('finalScore');
+  const retryBtn = document.getElementById('retry');
+
+  // Game variables
+  let frames = 0;
+  const gravity = 0.28;
+  const jump = 5.6;
+  let score = 0;
+  let highScore = parseInt(localStorage.getItem('fb_high')||'0',10);
+  highscoreEl.textContent = `High Score: ${highScore}`;
+
+  let playing = false;
+  let gameOver = false;
+
+  // GameOver sound
+  const snd = new Audio('https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg');
+
+  // Bird image: try user-supplied direct link first (from your Google URL)
+  // fallback to an inline SVG data URL (so it always works).
+  const userImgUrl = 'https://img.pikbest.com/png-images/qiantu/yellow-cartoon-cute-little-bird_2654581.png';
+  const fallbackSvg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'>
+      <g>
+        <ellipse cx='60' cy='60' rx='34' ry='28' fill='#FFD54A'/>
+        <circle cx='75' cy='53' r='6' fill='#000'/>
+        <path d='M38 58 q-10 -10 -16 -6 q8 6 8 6 q4 4 8 4' fill='#FFB74D' opacity='0.9'/>
+        <ellipse cx='98' cy='65' rx='6' ry='8' fill='#FFB74D' transform='rotate(20 98 65)'/>
+      </g>
+    </svg>
+  `.trim();
+  const fallbackDataUrl = 'data:image/svg+xml;utf8,' + encodeURIComponent(fallbackSvg);
+
+  const birdImg = new Image();
+  let birdReady = false;
+  birdImg.onload = () => { birdReady = true; };
+  birdImg.onerror = () => {
+    // on error, use fallback svg
+    birdImg.src = fallbackDataUrl;
+  };
+  birdImg.src = userImgUrl;
+
+  // Bird object
+  const bird = {
+    x: 60,
+    y: gh/2 - 10,
+    w: 46,
+    h: 46,
+    vy: 0,
+    angle: 0,
+    draw() {
+      ctx.save();
+      // flap tilt using small oscillation for wings + tilt by velocity
+      const tOffset = Math.sin(frames/6) * 2; // gentle bob
+      const tilt = Math.max(-0.6, Math.min(0.9, this.vy * 0.06)); // tilt range
+      const cx = this.x + this.w/2;
+      const cy = this.y + this.h/2 + tOffset;
+
+      ctx.translate(cx, cy);
+      ctx.rotate(tilt);
+      ctx.drawImage(birdImg, -this.w/2, -this.h/2, this.w, this.h);
+      ctx.restore();
+    },
+    update() {
+      this.vy += gravity;
+      this.y += this.vy;
+      // bounds
+      if (this.y + this.h > gh - 48) { // ground collision
+        this.y = gh - 48 - this.h;
+        this.vy = 0;
+        return true;
+      }
+      if (this.y < 0) {
+        this.y = 0;
+        this.vy = 0;
+      }
+      return false;
+    },
+    flap() { this.vy = -jump; }
+  };
+
+  // Pipes
+  const pipeW = 68;
+  const gap = 150;
+  const pipes = []; // each: {x,top,bottom,scored}
+  function spawnPipe(){
+    const top = 60 + Math.random() * (gh/2 - 80);
+    pipes.push({ x: gw + 20, top: top, bottom: gh - (top + gap), scored:false });
+  }
+
+  // Ground draw
+  let groundX = 0;
+  function drawGround(){
+    const groundH = 48;
+    // ground base
+    ctx.fillStyle = '#d35400';
+    ctx.fillRect(0, gh-groundH, gw, groundH);
+    // zig patterns for interest
+    ctx.fillStyle = '#f39c12';
+    for (let i=-40 + (groundX%40); i < gw+40; i += 40) {
+      ctx.beginPath();
+      ctx.moveTo(i, gh-groundH);
+      ctx.lineTo(i+20, gh-groundH-20);
+      ctx.lineTo(i+40, gh-groundH);
+      ctx.closePath();
+      ctx.fill();
+    }
+    groundX -= 2;
+  }
+
+  // Draw pipes
+  function drawPipes(){
+    pipes.forEach(p => {
+      // pole top
+      ctx.fillStyle = '#2e7d32';
+      ctx.fillRect(p.x, 0, pipeW, p.top);
+      // pole cap
+      ctx.fillStyle = '#1b5e20';
+      ctx.fillRect(p.x - 6, p.top - 16, pipeW + 12, 16);
+      // bottom pipe
+      ctx.fillStyle = '#2e7d32';
+      ctx.fillRect(p.x, gh - p.bottom, pipeW, p.bottom);
+      // bottom cap
+      ctx.fillStyle = '#1b5e20';
+      ctx.fillRect(p.x - 6, gh - p.bottom, pipeW + 12, 16);
+    });
+  }
+  // Update pipes & collisions
+  function updatePipes(){
+    for (let i = pipes.length - 1; i >= 0; i--) {
+      const p = pipes[i];
+      p.x -= 2.2;
+      // collision with bird using bounding-box
+      const birdBox = { l: bird.x, t: bird.y, r: bird.x + bird.w, b: bird.y + bird.h };
+      const topBox = { l: p.x, t: 0, r: p.x + pipeW, b: p.top };
+      const botBox = { l: p.x, t: gh - p.bottom, r: p.x + pipeW, b: gh };
+
+      function intersect(a,b){ return !(a.r <= b.l || a.l >= b.r || a.b <= b.t || a.t >= b.b); }
+      if (intersect(birdBox, topBox) || intersect(birdBox, botBox)) {
+        triggerGameOver();
+      }
+
+      // scoring: when pipe passes bird x and not scored
+      if (!p.scored && (p.x + pipeW) < bird.x) {
+        p.scored = true;
+        score++;
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem('fb_high', String(highScore));
+          highscoreEl.textContent = `High Score: ${highScore}`;
+        }
+      }
+
+      // remove off-screen
+      if (p.x + pipeW < -10) pipes.splice(i,1);
+    }
+
+    // spawn control
+    if (frames % 100 === 0) spawnPipe();
+  }
+
+  // Draw HUD
+  function drawHUD(){
+    ctx.fillStyle = '#003';
+    ctx.font = '22px Arial';
+    ctx.fillText('Score: ' + score, 12, 34);
+    ctx.fillText('High: ' + highScore, gw - 120, 34);
+  }
+
+  // Game over handling
+  function triggerGameOver(){
+    if (gameOver) return;
+    gameOver = true;
+    playing = false;
+    snd.currentTime = 0;
+    snd.play().catch(()=>{/* autoplay may block until user gesture; ignore */});
+    finalScoreEl.textContent = `Your score: ${score}`;
+    gameOverScreen.style.display = 'block';
+  }
+
+  // Reset
+  function reset(){
+    pipes.length = 0;
+    frames = 0; score = 0;
+    bird.y = gh/2 - 10; bird.vy = 0;
+    gameOver = false; playing = false;
+    gameOverScreen.style.display = 'none';
+    drawStart();
+  }
+
+  retryBtn.addEventListener('click', reset);
+
+  // Input handlers
+  function userFlap(){
+    if (gameOver) return;
+    if (!playing) {
+      playing = true;
+      // first spawn a couple so immediate gameplay
+      spawnPipe(); spawnPipe();
+      loop();
+    }
+    bird.flap();
+  }
+  document.addEventListener('keydown', (e)=>{ if (e.code === 'Space' || e.code.startsWith('Key') || e.code === 'ArrowUp') userFlap(); });
+  document.addEventListener('click', ()=> userFlap());
+  // touch for mobile
+  document.addEventListener('touchstart', (e)=>{ e.preventDefault(); userFlap(); }, {passive:false});
+
+  // Start text
+  function drawStart(){
+    ctx.clearRect(0,0,gw,gh);
+    drawGround();
+    ctx.fillStyle = '#042';
+    ctx.font = '20px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Click / Tap or press Space to start', gw/2, gh/2 - 20);
+    ctx.textAlign = 'left';
+    // draw bird (if ready) so user sees it
+    if (birdReady) bird.draw();
+  }
+
+  // main loop
+  function loop(){
+    if (!playing) return;
+    frames++;
+    ctx.clearRect(0,0,gw,gh);
+
+    // background subtle - optional clouds could be added
+    // pipes
+    updatePipes();
+    drawPipes();
+
+    // bird
+    const hitGround = bird.update();
+    bird.draw();
+
+    // ground
+    drawGround();
+
+    // HUD
+    drawHUD();
+
+    if (hitGround && !gameOver) {
+      triggerGameOver();
+    }
+
+    if (!gameOver) requestAnimationFrame(loop);
+  }
+
+  // Ensure fallback image is available quickly
+  if (!birdReady && birdImg.complete) birdReady = true;
+
+  // initial draw
+  drawStart();
+
+  // expose reset possibility to console (debug)
+  window._fb_reset = reset;
+
+})();
+</script>
+</body>
+</html>
